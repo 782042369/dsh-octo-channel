@@ -1,0 +1,7 @@
+# dsh-octo-channel bundle patch: inserts the Octo IM channel plugin into the
+# profile's layer stack (id = plugin's exported cordis name, name = package).
+# Install with `dsh plugin --profile <name> add <path-or-git-url>`; this patch
+# is applied automatically — do NOT insert the row again in the profile patch.
+- insert:
+    - id: octo-channel
+      name: 'dsh-octo-channel'
