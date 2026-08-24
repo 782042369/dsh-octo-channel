@@ -1,0 +1,13 @@
+dsh-octo-channel
+Copyright 2026 the dsh-octo-channel authors
+
+This product includes software developed at Mininglamp-OSS
+(https://github.com/Mininglamp-OSS/openclaw-channel-octo), licensed under
+the Apache License 2.0:
+
+  - src/protocol/socket.ts    (WuKongIM binary WebSocket client, WKSocket)
+  - src/protocol/api-error.ts (OctoApiError structured rate-limit error)
+  - src/protocol/api-fetch.ts (REST helpers: postJson, sendMessage, typing,
+                               heartbeat, registerBot, events polling)
+  - src/protocol/types.ts     (Bot API wire types)
+

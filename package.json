@@ -1,0 +1,50 @@
+{
+  "name": "dsh-octo-channel",
+  "description": "Octo IM channel for DeepSeek Harness: DMs and group @mentions drive per-chat DSH agent sessions, text replies return to Octo",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=20.0.0" },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "keywords": ["dsh", "deepseek-harness", "octo", "wukongim", "im", "channel", "plugin"],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "crypto-js": "^4.2.0",
+    "curve25519-js": "^0.0.4",
+    "md5-typescript": "^1.0.5",
+    "ws": "^8.21.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/crypto-js": "^4.2.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.9.3"
+  }
+}
