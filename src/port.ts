@@ -52,6 +52,8 @@ export interface OctoPortConfig {
   readonly wsUrl?: string | undefined;
   readonly heartbeatIntervalMs: number;
   readonly pluginVersion: string;
+  /** Diagnostic sink for outbound sends (keeps ack/reply delivery observable). */
+  readonly log?: ((line: string) => void) | undefined;
 }
 
 /** How many processed message ids to remember for dedupe. */
@@ -252,7 +254,10 @@ export class OctoPort extends EventEmitter {
       ...(options?.mentionUids && options.mentionUids.length > 0 ? { mentionUids: options.mentionUids } : {}),
       ...(options?.replyTo !== undefined ? { replyMsgId: options.replyTo } : {}),
     });
-    return { messageId: result?.message_id ?? "" };
+    const messageId = result?.message_id ?? "";
+    const preview = text.replace(/\s+/g, " ").slice(0, 80);
+    this.config.log?.("octo-channel: sent to " + to + " (msg " + messageId + "): " + preview);
+    return { messageId };
   }
 
   /** Best-effort typing indicator for one chat. */

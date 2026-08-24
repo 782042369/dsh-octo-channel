@@ -50,6 +50,7 @@ export function apply(ctx: Context, config: Config): void {
       ...(resolved.wsUrl === undefined ? {} : { wsUrl: resolved.wsUrl }),
       heartbeatIntervalMs: resolved.heartbeatIntervalMs,
       pluginVersion: PLUGIN_VERSION,
+      log: notify,
     });
     installChannel(ctx, resolved, port, notify);
   };

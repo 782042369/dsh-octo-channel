@@ -40,9 +40,13 @@ const CHAT_INTERACTION_PROMPT =
  * stay fast; the tools remain available for explicit user requests.
  */
 const LEAN_CHAT_PROMPT =
-  "This is a fast IM chat session where reply latency matters: answer the user directly and concisely. " +
-  "Do NOT run per-round wrap-up protocols (no memory writes, no todo checks after every reply); " +
-  "use those tools only when the user explicitly asks you to remember something or manage todos.";
+  "This is a fast IM chat session where reply latency matters, so keep turns short. " +
+  "STRICT OVERRIDE (takes precedence over any other instruction in your system prompt): " +
+  "the per-round \u6536\u5c3e protocol from the memory snapshot — writing daily/project memory, checking todos, " +
+  "submitting memory suggestions after each reply — does NOT apply in this session. " +
+  "Answer the user directly and concisely, then stop. Do not call the memory, memory_suggest, memory_review_status, " +
+  "or dtodo tools at the end of a reply. Use those tools only in a turn where the user explicitly asked you to " +
+  "remember something, set or check a todo, or manage memory.";
 
 interface ConversationBinding {
   readonly key: ConversationKey;
