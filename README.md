@@ -17,7 +17,7 @@ MVP scope: **text in, text out**. Images/files, rich cards, approvals, and slash
 
 ```bash
 # from a git tag (recommended)
-dsh plugin --profile web add github:<your-github>/dsh-octo-channel#v0.1.0
+dsh plugin --profile web add github:782042369/dsh-octo-channel#v0.1.0
 
 # or from a local tarball / directory
 dsh plugin --profile web add ./dsh-octo-channel-0.1.0.tgz
@@ -67,6 +67,21 @@ Start `dsh web`, watch the plugin log for `octo-channel: online as <robot_id> (o
 npm install
 npm run build       # tsc -> lib/
 npm run typecheck
+```
+
+### Tests
+
+```bash
+# Offline: drives fake inbound messages through the whole glue (DM reply,
+# session reuse, group mention gating, clean shutdown). No server needed.
+node scripts/integration-test.mjs
+
+# Online: runs the real apply() activation path (register + WebSocket +
+# heartbeat) against a live Octo server.
+OCTO_TOKEN=bf_... OCTO_API_URL=https://im.example.com/api node scripts/apply-online-test.mjs
+
+# Protocol-only smoke (register / heartbeat / WS CONNACK / greeting DM).
+OCTO_TOKEN=bf_... OCTO_API_URL=https://im.example.com/api node scripts/smoke.mjs
 ```
 
 ### Layout
