@@ -35,6 +35,15 @@ const CHAT_INTERACTION_PROMPT =
   "This conversation happens in a chat. Put questions and plan-approval requests in the reply; " +
   "the next user message supplies the answer.";
 
+/**
+ * Lean chat sessions skip per-round memory/todo wrap-up protocols so replies
+ * stay fast; the tools remain available for explicit user requests.
+ */
+const LEAN_CHAT_PROMPT =
+  "This is a fast IM chat session where reply latency matters: answer the user directly and concisely. " +
+  "Do NOT run per-round wrap-up protocols (no memory writes, no todo checks after every reply); " +
+  "use those tools only when the user explicitly asks you to remember something or manage todos.";
+
 interface ConversationBinding {
   readonly key: ConversationKey;
   readonly chatId: string;
@@ -83,6 +92,9 @@ export function installChannel(
   const composeAgent = (agentCtx: Context): void => {
     const prompt = agentCtx.get("systemPrompt") as HostSystemPrompt | undefined;
     prompt?.section({ name: "octo-channel:chat", order: 149, text: CHAT_INTERACTION_PROMPT });
+    if (config.leanChat) {
+      prompt?.section({ name: "octo-channel:lean", order: 150, text: LEAN_CHAT_PROMPT });
+    }
     const denied = new Set(config.denyTools);
     if (denied.size === 0) return;
     const tools = agentCtx.get("tools") as HostTools | undefined;
@@ -187,6 +199,7 @@ export function installChannel(
     const presenter = createTextPresenter(port, turn.target, {
       onFailure: reportSendFailure,
       typing: true,
+      ackDelayMs: config.ackDelayMs,
     });
     presentations.set(turn.id, { key: turn.target.conversationKey, presenter });
     return presenter;
@@ -215,7 +228,9 @@ export function installChannel(
         binding = rememberBinding(owner, target, message.channelType);
       }
       void binding;
-      coordinator.submit(owner, target, chatUserMessage(message));
+      // Create the presenter at submission so its ack timer runs from the
+      // moment the message arrives, not from the first host event.
+      presentationFor(coordinator.submit(owner, target, chatUserMessage(message)));
     } catch (error) {
       const messageDetail = detail(error);
       notify("octo-channel: agent creation failed for chat " + message.chatId + ": " + messageDetail);

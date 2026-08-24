@@ -40,6 +40,17 @@ export interface Config {
   sessionScope?: SessionScope;
   /** In group chats, only respond when the bot is @-mentioned. */
   requireMention?: boolean;
+  /**
+   * Keep chat turns lean (default true): the chat agent skips per-round
+   * memory/todo wrap-up protocols so replies stay fast; it still uses those
+   * tools when the user explicitly asks.
+   */
+  leanChat?: boolean;
+  /**
+   * If the first answer is not ready within this many milliseconds, send a
+   * "received, working on it" ack. 0 disables the ack. Default 3000.
+   */
+  ackDelayMs?: number;
   /** Tools chat agents may not call, denied per agent at execution. */
   denyTools?: string[];
   /** Interval of the Octo online-status heartbeat. */
@@ -57,6 +68,8 @@ export interface ResolvedConfig {
   preset?: string | undefined;
   sessionScope: SessionScope;
   requireMention: boolean;
+  leanChat: boolean;
+  ackDelayMs: number;
   denyTools: string[];
   heartbeatIntervalMs: number;
 }
@@ -72,6 +85,8 @@ export const Config: z<Config> = z.object({
   preset: z.string(),
   sessionScope: z.union(["chat", "chat-sender"] as const).default("chat"),
   requireMention: z.boolean().default(true),
+  leanChat: z.boolean().default(true),
+  ackDelayMs: z.number().default(3000),
   denyTools: z.array(String).default([...DEFAULT_DENY_TOOLS]),
   heartbeatIntervalMs: z.number().default(30000),
 });
@@ -88,6 +103,8 @@ export function resolveConfig(config: Config): ResolvedConfig {
     preset: config.preset,
     sessionScope: config.sessionScope ?? "chat",
     requireMention: config.requireMention ?? true,
+    leanChat: config.leanChat ?? true,
+    ackDelayMs: config.ackDelayMs ?? 3000,
     denyTools: config.denyTools ?? [...DEFAULT_DENY_TOOLS],
     heartbeatIntervalMs: config.heartbeatIntervalMs ?? 30000,
   };

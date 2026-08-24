@@ -37,6 +37,8 @@ octo-channel:
   # wsUrl: wss://...            # optional; auto-detected from register
   # requireMention: true        # default true for groups
   # sessionScope: chat          # chat | chat-sender
+  # leanChat: true              # default true; skip per-round memory/todo wrap-up for fast replies
+  # ackDelayMs: 3000            # send "收到，正在处理…" if the answer is not ready after 3s (0 = off)
   # provider: deepseek-official # optional agent model routing
   # model: deepseek-v4-flash
 ```
@@ -48,6 +50,8 @@ octo-channel:
 | `wsUrl` | auto | WuKongIM WebSocket URL (from the register response) |
 | `requireMention` | `true` | Group chats only respond to @-mentions |
 | `sessionScope` | `chat` | `chat`: one agent per chat; `chat-sender`: per-sender in groups |
+| `leanChat` | `true` | Chat agents skip per-round memory/todo wrap-up protocols so replies stay fast; the tools stay available on explicit request |
+| `ackDelayMs` | `3000` | If the first committed answer takes longer than this, a “收到，正在处理…” note is sent first; `0` disables the ack |
 | `heartbeatIntervalMs` | `30000` | Online-status heartbeat cadence |
 | `cwd` | `~/.dsh-octo` | Workspace directory for chat-driven agents |
 | `provider` / `model` | host default | Provider/model routing override for chat agents |
