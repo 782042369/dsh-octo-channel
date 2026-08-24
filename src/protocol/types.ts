@@ -95,6 +95,14 @@ export const enum MessageType {
   InteractiveCard = 17,
 }
 
+/** One entry of the bot events queue (POST /v1/bot/events). */
+export interface BotEvent {
+  event_id: number;
+  event_type?: string;
+  event_data?: Record<string, unknown>;
+  message?: Record<string, unknown>;
+}
+
 /** RichText(=14) block. */
 export interface RichTextBlock {
   type: string;

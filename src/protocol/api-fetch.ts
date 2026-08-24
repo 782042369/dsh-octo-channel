@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { OctoApiError } from "./api-error.js";
-import { ChannelType, MessageType, type BotRegisterResp, type SendMessageResult } from "./types.js";
+import { ChannelType, MessageType, type BotEvent, type BotRegisterResp, type SendMessageResult } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
@@ -211,4 +211,79 @@ export async function sendHeartbeat(params: {
   await postJson(params.apiUrl, params.botToken, "/v1/bot/heartbeat", {}, params.signal, {
     retryOn429: false,
   });
+}
+
+// ── Events queue (long poll) ─────────────────────────────────────────────
+// The WebSocket is the primary real-time transport. These helpers expose the
+// REST events queue (POST /v1/bot/events) as the fallback / supplement — the
+// same wire contract the upstream plugin's poller uses.
+
+/** Server-side clamp on the `wait` parameter. */
+export const MAX_EVENT_WAIT_SECONDS = 30;
+/** Smallest useful hold: below this, holds issue more requests than they replace. */
+export const MIN_EVENT_WAIT_SECONDS = 5;
+/** Idle bound for a plain (non-holding) poll request. */
+const EVENTS_POLL_TIMEOUT_MS = 10_000;
+/** Slack added on top of a long-poll hold before the client gives up. */
+const EVENTS_POLL_WAIT_MARGIN_MS = 10_000;
+
+/** Client timeout for one /v1/bot/events request — always exceeds the requested hold. */
+export function eventsPollTimeoutMs(waitSeconds?: number): number {
+  if (!waitSeconds || waitSeconds <= 0) return EVENTS_POLL_TIMEOUT_MS;
+  return waitSeconds * 1000 + EVENTS_POLL_WAIT_MARGIN_MS;
+}
+
+/**
+ * Pull bot events strictly after the supplied cursor. With waitSeconds > 0 the
+ * server holds an empty queue open for that long (long poll); an expired hold
+ * is a normal empty batch. A non-zero wait below MIN_EVENT_WAIT_SECONDS is
+ * raised to it.
+ */
+export async function fetchBotEvents(params: {
+  apiUrl: string;
+  botToken: string;
+  sinceEventId?: number;
+  limit?: number;
+  waitSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<BotEvent[]> {
+  const waitSeconds =
+    params.waitSeconds && params.waitSeconds > 0
+      ? Math.min(MAX_EVENT_WAIT_SECONDS, Math.max(MIN_EVENT_WAIT_SECONDS, Math.floor(params.waitSeconds)))
+      : 0;
+  const response = await postJson<{ results?: BotEvent[] }>(
+    params.apiUrl,
+    params.botToken,
+    "/v1/bot/events",
+    {
+      event_id: params.sinceEventId ?? 0,
+      limit: Math.max(1, Math.min(100, Math.floor(params.limit ?? 20))),
+      // Omitted entirely when not long-polling, so the request stays
+      // byte-identical to what servers that predate the `wait` field accept.
+      ...(waitSeconds > 0 ? { wait: waitSeconds } : {}),
+    },
+    params.signal ?? AbortSignal.timeout(eventsPollTimeoutMs(waitSeconds)),
+    // The poll loop paces itself from the outcome of each request; a sleep
+    // inside would inflate the "did the server hold?" measurement.
+    { retryOn429: false },
+  );
+  return Array.isArray(response?.results) ? response.results : [];
+}
+
+/** Best-effort queue pruning after a recognized bot event has been accepted. */
+export async function ackBotEvent(params: {
+  apiUrl: string;
+  botToken: string;
+  eventId: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  await postJson(
+    params.apiUrl,
+    params.botToken,
+    "/v1/bot/events/" + params.eventId + "/ack",
+    {},
+    params.signal ?? AbortSignal.timeout(EVENTS_POLL_TIMEOUT_MS),
+    // A lost ack costs at most one redelivery; never retry inside the loop.
+    { retryOn429: false },
+  );
 }
