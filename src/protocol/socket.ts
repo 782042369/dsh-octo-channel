@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
+import { randomBytes } from "node:crypto";
 import { generateKeyPair, sharedKey } from "curve25519-js";
 import { Buffer } from "buffer";
 import CryptoJS from "crypto-js";
@@ -21,6 +22,12 @@ const enum PacketType {
 }
 
 const PROTO_VERSION = 4;
+/** Maximum retained parser bytes across fragmented WebSocket frames. */
+export const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+/** Maximum one WuKongIM packet accepted by the framing layer. */
+export const MAX_PACKET_BYTES = 2 * 1024 * 1024;
+/** Maximum bytes used by the remaining-length varint. */
+const MAX_VARINT_BYTES = 4;
 
 // ─── Binary Encoder / Decoder ───────────────────────────────────────────────
 
@@ -50,69 +57,100 @@ class Encoder {
 
 class Decoder {
   private offset = 0;
-  constructor(private data: Uint8Array) {}
+  constructor(private readonly data: Uint8Array) {}
 
-  readByte(): number { return this.data[this.offset++]; }
+  /** Ensure a bounded number of bytes remains before reading.
+   * @param count - bytes required by the next primitive.
+   * @returns void; throws on a truncated packet.
+   */
+  private ensure(count: number): void {
+    if (!Number.isInteger(count) || count < 0 || this.offset + count > this.data.length) throw new Error("octo: truncated binary packet");
+  }
 
+  /** Read one byte from the packet.
+   * @returns The unsigned byte value.
+   */
+  readByte(): number {
+    this.ensure(1);
+    return this.data[this.offset++];
+  }
+
+  /** Read a big-endian unsigned 16-bit integer.
+   * @returns The integer value.
+   */
   readInt16(): number {
+    this.ensure(2);
     const v = (this.data[this.offset] << 8) | this.data[this.offset + 1];
     this.offset += 2;
     return v;
   }
 
+  /** Read a big-endian unsigned 32-bit integer.
+   * @returns The integer value.
+   */
   readInt32(): number {
-    const v =
-      (this.data[this.offset] << 24) |
-      (this.data[this.offset + 1] << 16) |
-      (this.data[this.offset + 2] << 8) |
-      this.data[this.offset + 3];
+    this.ensure(4);
+    const v = (this.data[this.offset] << 24) | (this.data[this.offset + 1] << 16) | (this.data[this.offset + 2] << 8) | this.data[this.offset + 3];
     this.offset += 4;
-    return v >>> 0; // unsigned
+    return v >>> 0;
   }
 
+  /** Read an int64 without losing decimal precision.
+   * @returns The decimal string representation.
+   */
   readInt64String(): string {
-    // Read 8 bytes as a big-endian unsigned integer string
+    this.ensure(8);
     let n = BigInt(0);
-    for (let i = 0; i < 8; i++) {
-      n = (n << 8n) | BigInt(this.data[this.offset + i]);
-    }
+    for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(this.data[this.offset + i]);
     this.offset += 8;
     return n.toString();
   }
 
+  /** Read an int64 as a bigint.
+   * @returns The unsigned bigint value.
+   */
   readInt64BigInt(): bigint {
+    this.ensure(8);
     let n = BigInt(0);
-    for (let i = 0; i < 8; i++) {
-      n = (n << 8n) | BigInt(this.data[this.offset + i]);
-    }
+    for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(this.data[this.offset + i]);
     this.offset += 8;
     return n;
   }
 
+  /** Read a length-prefixed UTF-8 string.
+   * @returns The decoded string.
+   */
   readString(): string {
     const len = this.readInt16();
     if (len <= 0) return "";
+    this.ensure(len);
     const slice = this.data.slice(this.offset, this.offset + len);
     this.offset += len;
-    return uintToString(Array.from(slice));
+    return uintToString(slice);
   }
 
+  /** Read the remaining packet bytes.
+   * @returns A view of the remaining payload.
+   */
   readRemaining(): Uint8Array {
     const d = this.data.slice(this.offset);
     this.offset = this.data.length;
     return d;
   }
 
+  /** Read and validate the WuKongIM remaining-length varint.
+   * @returns The decoded remaining length.
+   */
   readVariableLength(): number {
-    let multiplier = 0;
+    let multiplier = 1;
     let rLength = 0;
-    while (multiplier < 27) {
+    for (let index = 0; index < MAX_VARINT_BYTES; index++) {
       const b = this.readByte();
-      rLength = rLength | ((b & 127) << multiplier);
-      if ((b & 128) === 0) break;
-      multiplier += 7;
+      rLength += (b & 127) * multiplier;
+      if ((b & 128) === 0) return rLength;
+      multiplier *= 128;
     }
-    return rLength;
+    throw new Error("octo: malformed remaining-length varint");
   }
 }
 
@@ -123,13 +161,26 @@ function stringToUint(str: string): number[] {
   return arr;
 }
 
-function uintToString(array: number[]): string {
-  const encoded = String.fromCharCode(...array);
+/** Convert bytes to a UTF-8 string in bounded chunks.
+ * @param array - byte-like input.
+ * @returns Decoded UTF-8 text.
+ */
+function uintToString(array: ArrayLike<number>): string {
+  let encoded = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < array.length; offset += chunkSize) {
+    const chunk: number[] = [];
+    const end = Math.min(array.length, offset + chunkSize);
+    for (let index = offset; index < end; index++) chunk.push(array[index]);
+    encoded += String.fromCharCode(...chunk);
+  }
   return decodeURIComponent(escape(encoded));
 }
 
 function encodeVariableLength(len: number): number[] {
+  if (!Number.isInteger(len) || len < 0 || len > MAX_PACKET_BYTES) throw new Error("octo: invalid packet length");
   const ret: number[] = [];
+  if (len === 0) return [0];
   while (len > 0) {
     let digit = len % 0x80;
     len = Math.floor(len / 0x80);
@@ -142,7 +193,7 @@ function encodeVariableLength(len: number): number[] {
 // ─── AES-CBC Encryption Helpers ─────────────────────────────────────────────
 
 function aesDecrypt(data: Uint8Array, aesKey: string, aesIV: string): Uint8Array {
-  const str = String.fromCharCode(...Array.from(data));
+  const str = uintToString(data);
   const ciphertext = CryptoJS.enc.Base64.parse(str);
   const decrypted = CryptoJS.AES.decrypt(
     CryptoJS.enc.Base64.stringify(ciphertext),
@@ -277,6 +328,9 @@ export class WKSocket extends EventEmitter {
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastConnectTime = 0;
   private rapidDisconnectCount = 0;
+  private readyPromise: Promise<void> | undefined;
+  private readyResolve: (() => void) | undefined;
+  private readyReject: ((error: Error) => void) | undefined;
 
   // Per-instance crypto state (set after CONNACK)
   private aesKey = "";
@@ -291,10 +345,41 @@ export class WKSocket extends EventEmitter {
     super();
   }
 
-  /** Connect to WuKongIM WebSocket */
-  connect(): void {
+  /** Connect to WuKongIM WebSocket and resolve after CONNACK.
+   * @returns A promise for the first usable connection generation.
+   */
+  connect(): Promise<void> {
+    if (this.connected) return Promise.resolve();
+    if (this.readyPromise !== undefined && this.needReconnect) return this.readyPromise;
     this.needReconnect = true;
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
     this.doConnect();
+    return this.readyPromise;
+  }
+
+  /** Resolve the first-connection waiter exactly once.
+   * @returns void.
+   */
+  private markReady(): void {
+    const resolve = this.readyResolve;
+    this.readyResolve = undefined;
+    this.readyReject = undefined;
+    resolve?.();
+  }
+
+  /** Reject and clear the first-connection waiter.
+   * @param error - terminal connection failure.
+   * @returns void.
+   */
+  private rejectReady(error: Error): void {
+    const reject = this.readyReject;
+    this.readyResolve = undefined;
+    this.readyReject = undefined;
+    this.readyPromise = undefined;
+    reject?.(error);
   }
 
   /** Update credentials for reconnection (e.g. after token refresh) */
@@ -306,6 +391,7 @@ export class WKSocket extends EventEmitter {
   /** Gracefully disconnect */
   disconnect(): void {
     this.needReconnect = false;
+    this.rejectReady(new Error("octo: connection stopped before CONNACK"));
     this.connected = false;
     this.lastConnectTime = 0;
     this.rapidDisconnectCount = 0;
@@ -322,6 +408,7 @@ export class WKSocket extends EventEmitter {
   /** Disconnect and wait for the old WS to fully close before resolving. */
   async disconnectAndWait(timeoutMs = 2000): Promise<void> {
     this.needReconnect = false;
+    this.rejectReady(new Error("octo: connection stopped before CONNACK"));
     this.connected = false;
     this.stopHeart();
     this.stopReconnectTimer();
@@ -346,7 +433,7 @@ export class WKSocket extends EventEmitter {
       try { oldWs.close(); } catch { /* ignore */ }
       setTimeout(() => {
         if (!resolved) {
-          try { (oldWs as any).terminate?.(); } catch { /* ignore */ }
+          try { (oldWs as WebSocket & { terminate?: () => void }).terminate?.(); } catch { /* ignore */ }
           done();
         }
       }, timeoutMs);
@@ -420,7 +507,7 @@ export class WKSocket extends EventEmitter {
     }
 
     this.tempBuffer = [];
-    const ws = new WebSocket(this.opts.wsUrl);
+    const ws = new WebSocket(this.opts.wsUrl, { maxPayload: MAX_PACKET_BYTES, handshakeTimeout: CONNECT_DEADLINE_MS });
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     this.startConnectDeadline(ws);
@@ -428,8 +515,8 @@ export class WKSocket extends EventEmitter {
     ws.on("open", () => {
       if (this.ws !== ws) return; // stale guard
       this.tempBuffer = [];
-      // Generate DH key pair
-      const seed = Uint8Array.from(stringToUint(generateDeviceID()));
+      // Generate the DH seed from the OS CSPRNG; Math.random is not suitable for key material.
+      const seed = randomBytes(32);
       const keyPair = generateKeyPair(seed);
       this.dhPrivateKey = keyPair.private;
       const pubKey = Buffer.from(keyPair.public).toString("base64");
@@ -589,10 +676,14 @@ export class WKSocket extends EventEmitter {
     }
   }
 
+  /** Parse fragmented WebSocket bytes without spread-based stack overflow.
+   * @param data - one received binary chunk.
+   * @returns void; malformed input closes the current generation.
+   */
   private handleRawData(data: Uint8Array): void {
-    this.tempBuffer.push(...Array.from(data));
-
     try {
+      if (data.byteLength > MAX_BUFFER_BYTES || this.tempBuffer.length + data.byteLength > MAX_BUFFER_BYTES) throw new Error("octo: binary parser buffer limit exceeded");
+      for (const byte of data) this.tempBuffer.push(byte);
       let lenBefore: number;
       let lenAfter: number;
       do {
@@ -601,8 +692,7 @@ export class WKSocket extends EventEmitter {
         lenAfter = this.tempBuffer.length;
       } while (lenBefore !== lenAfter && lenAfter >= 1);
     } catch (err) {
-      console.debug("[WKSocket] decode error:", err);
-      // Reset buffer and reconnect
+      console.debug("[WKSocket] decode error:", err instanceof Error ? err.message : err);
       this.tempBuffer = [];
       if (this.ws) {
         try { this.ws.close(); } catch { /* ignore */ }
@@ -615,6 +705,7 @@ export class WKSocket extends EventEmitter {
 
     const header = data[0];
     const packetType = header >> 4;
+    if (packetType < PacketType.CONNECT || packetType > PacketType.DISCONNECT) throw new Error("octo: unknown packet type");
 
     // PONG is a single byte
     if (packetType === PacketType.PONG) {
@@ -646,6 +737,7 @@ export class WKSocket extends EventEmitter {
     } while (hasMore);
 
     if (!remLengthFull) return data; // Incomplete frame
+    if (remLength > MAX_PACKET_BYTES) throw new Error("octo: packet exceeds max payload");
 
     const remLengthLength = pos - fixedHeaderLength;
     const totalLength = fixedHeaderLength + remLengthLength + remLength;
@@ -723,24 +815,25 @@ export class WKSocket extends EventEmitter {
       this.lastConnectTime = Date.now();
       this.restartHeart();
       this.startStableTimer();
+      this.markReady();
       this.opts.onConnected?.();
     } else if (reasonCode === 0) {
       // Kicked
+      const error = new Error("Kicked by server");
       this.connected = false;
       this.needReconnect = false;
+      this.rejectReady(error);
       if (this.ws) { try { this.ws.close(); } catch {} this.ws = null; }
-      this.opts.onError?.(new Error("Kicked by server"));
+      this.opts.onError?.(error);
       this.opts.onDisconnected?.();
     } else {
       // Connect failed
+      const error = new Error(`Connect failed: reasonCode=${reasonCode}`);
       this.connected = false;
       this.needReconnect = false;
-      // Closed and dropped like the kicked branch above. Leaving an OPEN socket here makes
-      // isConnectingOrConnected() permanently true for a connection that will never carry
-      // traffic, so anything using that predicate to decide whether to step in stays out
-      // forever.
+      this.rejectReady(error);
       if (this.ws) { try { this.ws.close(); } catch { /* ignore */ } this.ws = null; }
-      this.opts.onError?.(new Error(`Connect failed: reasonCode=${reasonCode}`));
+      this.opts.onError?.(error);
     }
   }
 
@@ -763,26 +856,26 @@ export class WKSocket extends EventEmitter {
     }
     const encryptedPayload = dec.readRemaining();
 
-    // Send RECVACK immediately
-    this.sendRaw(encodeRecvackPacket(messageID, messageSeq));
-
-    // Decrypt payload
-    let payloadObj: Record<string, any> | undefined;
+    // Decrypt and validate before acknowledging; malformed data remains replayable.
+    let payloadObj: Record<string, unknown>;
     try {
       const decryptedBytes = aesDecrypt(encryptedPayload, this.aesKey, this.aesIV);
-      const payloadStr = uintToString(Array.from(decryptedBytes));
-      payloadObj = JSON.parse(payloadStr);
+      const payloadStr = uintToString(decryptedBytes);
+      const parsed: unknown = JSON.parse(payloadStr);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("payload is not an object");
+      payloadObj = parsed as Record<string, unknown>;
     } catch (err) {
-      console.debug("[WKSocket] payload decrypt/parse error:", err);
+      console.debug("[WKSocket] payload decrypt/parse error:", err instanceof Error ? err.message : err);
       return;
     }
 
     // Build MessagePayload (same shape as SDK's contentObj-based output)
     const payload: MessagePayload = {
-      type: payloadObj?.type ?? 0,
-      content: payloadObj?.content,
       ...payloadObj,
+      type: typeof payloadObj.type === "number" ? payloadObj.type as MessagePayload["type"] : 0 as MessagePayload["type"],
+      content: typeof payloadObj.content === "string" ? payloadObj.content : undefined,
     };
+    this.sendRaw(encodeRecvackPacket(messageID, messageSeq));
 
     const msg: BotMessage = {
       message_id: messageID,
@@ -803,6 +896,7 @@ export class WKSocket extends EventEmitter {
 
     this.connected = false;
     this.needReconnect = false;
+    this.rejectReady(new Error("Kicked by server"));
     this.stopHeart();
     this.clearStableTimer();
     this.clearConnectDeadline();
@@ -814,10 +908,12 @@ export class WKSocket extends EventEmitter {
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
+/** Generate a stable-shape random device id without Math.random entropy.
+ * @returns A UUID-shaped hexadecimal device id.
+ */
 function generateDeviceID(): string {
-  return "xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return bytes.toString("hex");
 }

@@ -12,7 +12,7 @@ import { OctoPort } from "./port.js";
 const SETTINGS_NAMESPACE = "octo-channel";
 
 /** The plugin version reported to the Octo server at registration. */
-const PLUGIN_VERSION = "0.1.0";
+const PLUGIN_VERSION = "0.2.0";
 
 /** A resolved configuration carrying enough credentials to connect. */
 function hasCredentials(config: ResolvedConfig): boolean {
@@ -74,6 +74,13 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     if (hasCredentials(resolved)) {
+      if (resolved.accessMode === "open") {
+        notify("octo-channel: warning - accessMode=open grants the bot to every permitted chat");
+      } else if (resolved.accessMode === "allowlist" && resolved.allowedUserIds.length === 0 && resolved.allowedChatIds.length === 0) {
+        notify("octo-channel: accessMode=allowlist has no entries; all inbound messages will be denied");
+      } else if (resolved.accessMode === "owner") {
+        notify("octo-channel: accessMode=owner (secure default)");
+      }
       notify("octo-channel: starting bot (" + resolved.apiUrl + ")");
       start(resolved);
       return;

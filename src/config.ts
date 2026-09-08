@@ -53,6 +53,20 @@ export interface Config {
   ackDelayMs?: number;
   /** Tools chat agents may not call, denied per agent at execution. */
   denyTools?: string[];
+  /** Explicit sender allowlist; an empty list means allow all senders. */
+  allowedUserIds?: string[];
+  /** Explicit chat allowlist; an empty list means allow all chats. */
+  allowedChatIds?: string[];
+  /** Access mode: owner-only by default, explicit allowlist, or intentionally open. */
+  accessMode?: "owner" | "allowlist" | "open";
+  /** Sender denylist, evaluated before the allowlists. */
+  deniedUserIds?: string[];
+  /** Chat denylist, evaluated before the allowlists. */
+  deniedChatIds?: string[];
+  /** Maximum inbound text length accepted from Octo. */
+  maxMessageChars?: number;
+  /** Maximum queued turns per conversation before applying backpressure. */
+  maxQueuedTurns?: number;
   /** Interval of the Octo online-status heartbeat. */
   heartbeatIntervalMs?: number;
 }
@@ -69,8 +83,15 @@ export interface ResolvedConfig {
   sessionScope: SessionScope;
   requireMention: boolean;
   leanChat: boolean;
+  accessMode: "owner" | "allowlist" | "open";
   ackDelayMs: number;
   denyTools: string[];
+  allowedUserIds: string[];
+  allowedChatIds: string[];
+  deniedUserIds: string[];
+  deniedChatIds: string[];
+  maxMessageChars: number;
+  maxQueuedTurns: number;
   heartbeatIntervalMs: number;
 }
 
@@ -86,10 +107,28 @@ export const Config: z<Config> = z.object({
   sessionScope: z.union(["chat", "chat-sender"] as const).default("chat"),
   requireMention: z.boolean().default(true),
   leanChat: z.boolean().default(true),
+  accessMode: z.union(["owner", "allowlist", "open"] as const).default("owner"),
   ackDelayMs: z.number().default(3000),
   denyTools: z.array(String).default([...DEFAULT_DENY_TOOLS]),
+  allowedUserIds: z.array(String).default([]),
+  allowedChatIds: z.array(String).default([]),
+  deniedUserIds: z.array(String).default([]),
+  deniedChatIds: z.array(String).default([]),
+  maxMessageChars: z.number().default(12000),
+  maxQueuedTurns: z.number().default(3),
   heartbeatIntervalMs: z.number().default(30000),
 });
+
+/** Normalize a string list into a trimmed, duplicate-free policy set. */
+function normalizeIds(values: readonly string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+}
+
+/** Clamp a finite numeric setting to a safe integer range. */
+function clampInt(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value as number)));
+}
 
 /** Defaults for direct callers that bypass the Cordis Loader. */
 export function resolveConfig(config: Config): ResolvedConfig {
@@ -104,8 +143,15 @@ export function resolveConfig(config: Config): ResolvedConfig {
     sessionScope: config.sessionScope ?? "chat",
     requireMention: config.requireMention ?? true,
     leanChat: config.leanChat ?? true,
-    ackDelayMs: config.ackDelayMs ?? 3000,
-    denyTools: config.denyTools ?? [...DEFAULT_DENY_TOOLS],
-    heartbeatIntervalMs: config.heartbeatIntervalMs ?? 30000,
+    accessMode: config.accessMode === "allowlist" || config.accessMode === "open" ? config.accessMode : "owner",
+    ackDelayMs: clampInt(config.ackDelayMs, 3000, 0, 300_000),
+    denyTools: normalizeIds(config.denyTools ?? [...DEFAULT_DENY_TOOLS]),
+    allowedUserIds: normalizeIds(config.allowedUserIds),
+    allowedChatIds: normalizeIds(config.allowedChatIds),
+    deniedUserIds: normalizeIds(config.deniedUserIds),
+    deniedChatIds: normalizeIds(config.deniedChatIds),
+    maxMessageChars: clampInt(config.maxMessageChars, 12_000, 256, 200_000),
+    maxQueuedTurns: clampInt(config.maxQueuedTurns, 3, 1, 32),
+    heartbeatIntervalMs: clampInt(config.heartbeatIntervalMs, 30_000, 5_000, 300_000),
   };
 }

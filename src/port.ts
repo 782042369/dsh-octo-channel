@@ -115,16 +115,21 @@ export class OctoPort extends EventEmitter {
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private seen = new Set<string>();
   private connecting: Promise<void> | undefined;
+  private reconnectingRegistration: Promise<void> | undefined;
+  private stopped = true;
 
   constructor(config: OctoPortConfig) {
     super();
     this.config = config;
   }
 
-  /** Register the bot, open the WuKongIM socket, and start the heartbeat. */
+  /** Register the bot, await CONNACK, and start the heartbeat.
+   * @returns A promise settled only after the transport is usable.
+   */
   connect(): Promise<void> {
+    this.stopped = false;
     if (this.connecting === undefined) {
-      this.connecting = this.connectOnce().catch((error: unknown) => {
+      this.connecting = this.connectOnce(false).catch((error: unknown) => {
         this.connecting = undefined;
         throw error;
       });
@@ -151,54 +156,94 @@ export class OctoPort extends EventEmitter {
     };
   }
 
-  /** Stop the heartbeat and close the socket. */
+  /** Stop timers, cancel reconnect, and drain the current socket.
+   * @returns A promise settled after transport teardown.
+   */
   async disconnect(): Promise<void> {
+    this.stopped = true;
     if (this.heartbeatTimer !== undefined) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
-    this.socket?.disconnect();
+    const socket = this.socket;
     this.socket = undefined;
-    await (this.connecting ?? Promise.resolve());
+    await socket?.disconnectAndWait();
+    await this.connecting?.catch(() => undefined);
+    await this.reconnectingRegistration?.catch(() => undefined);
+    this.connecting = undefined;
   }
 
-  private async connectOnce(): Promise<void> {
+  /** Register once and wait for a real WuKongIM CONNACK.
+   * @param forceRefresh - request a fresh server-side registration.
+   * @returns A promise settled after registration and handshake.
+   */
+  private async connectOnce(forceRefresh: boolean): Promise<void> {
     const registered = await registerBot({
       apiUrl: this.config.apiUrl,
       botToken: this.config.botToken,
+      forceRefresh,
       agentPlatform: "dsh",
       pluginVersion: this.config.pluginVersion,
     });
+    if (this.stopped) throw new Error("octo: port stopped during registration");
     this.robotId = registered.robot_id;
     this.ownerUid = registered.owner_uid;
     const wsUrl = this.config.wsUrl ?? registered.ws_url;
-    if (wsUrl === undefined || wsUrl === "") {
-      throw new Error("octo: no WebSocket URL - the register response carries none and config.wsUrl is unset");
-    }
-    this.socket = new WKSocket({
+    if (wsUrl === undefined || wsUrl === "") throw new Error("octo: no WebSocket URL - the register response carries none and config.wsUrl is unset");
+    const socket = new WKSocket({
       wsUrl,
       uid: registered.robot_id,
       token: registered.im_token,
       onMessage: (message) => this.handleSocketMessage(message),
       onConnected: () => this.emit("reconnected"),
       onDisconnected: () => this.emit("reconnecting"),
-      onError: (error: Error) => this.emit("error", error),
+      onError: (error: Error) => {
+        this.emit("error", error);
+        void this.reregisterAfterFatal(error);
+      },
     });
-    this.socket.connect();
-    this.startHeartbeat();
+    this.socket = socket;
+    await socket.connect();
+    if (!this.stopped) this.startHeartbeat();
   }
 
+  /** Re-register after a fatal handshake or authentication failure.
+   * @param cause - fatal socket error for diagnostics.
+   * @returns A promise settled after a replacement connection is ready.
+   */
+  private async reregisterAfterFatal(cause: Error): Promise<void> {
+    if (this.stopped || this.reconnectingRegistration !== undefined) return;
+    this.reconnectingRegistration = (async () => {
+      this.emit("reconnecting", cause);
+      if (this.heartbeatTimer !== undefined) {
+        clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = undefined;
+      }
+      const previous = this.socket;
+      this.socket = undefined;
+      await previous?.disconnectAndWait();
+      await this.connectOnce(true);
+    })().catch((error: unknown) => {
+      this.emit("error", error instanceof Error ? error : new Error(String(error)));
+    }).finally(() => {
+      this.reconnectingRegistration = undefined;
+    });
+    await this.reconnectingRegistration;
+  }
+
+  /** Start one heartbeat loop, replacing any previous loop.
+   * @returns void.
+   */
   private startHeartbeat(): void {
+    if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     const beat = (): void => {
-      void sendHeartbeat({
-        apiUrl: this.config.apiUrl,
-        botToken: this.config.botToken,
-      }).catch((error: unknown) => {
+      void sendHeartbeat({ apiUrl: this.config.apiUrl, botToken: this.config.botToken }).catch((error: unknown) => {
         this.emit("heartbeat-failed", error);
       });
     };
     beat();
     this.heartbeatTimer = setInterval(beat, this.config.heartbeatIntervalMs);
+    (this.heartbeatTimer as { unref?: () => void }).unref?.();
   }
 
   /** Dedupe, filter self-traffic, normalize, and emit one inbound message. */
@@ -228,7 +273,9 @@ export class OctoPort extends EventEmitter {
     const mention = message.payload.mention;
     const botMentioned =
       (this.robotId !== undefined && uids.includes(this.robotId)) ||
-      (isFlag(mention?.ais) && !isFlag(mention?.all) && !isFlag(mention?.humans));
+      isFlag(mention?.all) ||
+      isFlag(mention?.humans) ||
+      isFlag(mention?.ais);
 
     const normalized: OctoMessage = Object.freeze({
       chatId,
@@ -255,8 +302,7 @@ export class OctoPort extends EventEmitter {
       ...(options?.replyTo !== undefined ? { replyMsgId: options.replyTo } : {}),
     });
     const messageId = result?.message_id ?? "";
-    const preview = text.replace(/\s+/g, " ").slice(0, 80);
-    this.config.log?.("octo-channel: sent to " + to + " (msg " + messageId + "): " + preview);
+    this.config.log?.("octo-channel: outbound send completed (channel=" + to + ", messageId=" + messageId + ", chars=" + text.length + ")");
     return { messageId };
   }
 

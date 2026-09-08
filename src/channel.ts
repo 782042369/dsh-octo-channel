@@ -55,8 +55,48 @@ interface ConversationBinding {
   readonly owner: OwnedAgent;
 }
 
+/** Convert an unknown failure into a log-safe string.
+ * @param error - thrown value from the host or transport.
+ * @returns A human-readable diagnostic string.
+ */
 function detail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Return whether one inbound message passes the configured sender/chat policy.
+ * @param message - normalized inbound Octo message.
+ * @param config - resolved access policy.
+ * @returns True when the message is allowed to create or join a session.
+ */
+function isMessageAllowed(message: OctoMessage, config: ResolvedConfig, ownerUid: string | undefined): boolean {
+  const deniedUserIds = config.deniedUserIds ?? [];
+  const deniedChatIds = config.deniedChatIds ?? [];
+  const allowedUserIds = config.allowedUserIds ?? [];
+  const allowedChatIds = config.allowedChatIds ?? [];
+  if (deniedUserIds.includes(message.senderId) || deniedChatIds.includes(message.chatId)) return false;
+  if (config.accessMode === "open") return true;
+  if (allowedUserIds.length > 0 || allowedChatIds.length > 0) {
+    const userAllowed = allowedUserIds.length === 0 || allowedUserIds.includes(message.senderId);
+    const chatAllowed = allowedChatIds.length === 0 || allowedChatIds.includes(message.chatId);
+    return userAllowed && chatAllowed;
+  }
+  return config.accessMode === "owner" && ownerUid !== undefined && message.senderId === ownerUid;
+}
+
+/** Send a bounded, non-sensitive failure message to the originating chat.
+ * @param port - Octo transport used for the reply.
+ * @param message - original inbound message and destination.
+ * @param text - pre-sanitized user-facing text.
+ * @param onFailure - sink for an outbound delivery failure.
+ * @returns A promise settled after the best-effort send completes.
+ */
+async function sendUserFacingFailure(
+  port: OctoPort,
+  message: OctoMessage,
+  text: string,
+  onFailure: (error: unknown) => void,
+): Promise<void> {
+  await port.send(message.chatId, { text }, { channelType: message.channelType }).catch(onFailure);
 }
 
 /** Convert one normalized Octo message into an immutable host user message. */
@@ -210,8 +250,17 @@ export function installChannel(
   };
 
   const handleMessage = async (message: OctoMessage): Promise<void> => {
+    if (!isMessageAllowed(message, config, port.ownerUid)) {
+      ctx.logger.debug("octo-channel: message rejected by access policy");
+      return;
+    }
     if (message.content.trim() === "") return;
-    // Group/thread mention gate: DMs always pass; @所有人 / @所有AI count as a mention.
+    const maxMessageChars = config.maxMessageChars ?? 12_000;
+    if (message.content.length > maxMessageChars) {
+      await sendUserFacingFailure(port, message, "消息过长，请拆分后重试。", reportSendFailure);
+      return;
+    }
+    // Group/thread mention gate: DMs always pass; broadcast mentions count as a mention.
     if (message.channelType !== 1 && config.requireMention && !message.botMentioned) {
       ctx.logger.debug("octo-channel: group message without mention ignored in %s", message.chatId);
       return;
@@ -224,6 +273,10 @@ export function installChannel(
     });
     try {
       const state = await prepare();
+      if (coordinator.pendingCount(target.conversationKey) >= (config.maxQueuedTurns ?? 3)) {
+        await sendUserFacingFailure(port, message, "当前会话正在处理较多任务，请稍后重试。", reportSendFailure);
+        return;
+      }
       let owner = await state.agents.acquire(target.conversationKey);
       let binding = rememberBinding(owner, target, message.channelType);
       if (!active) return;
@@ -239,9 +292,7 @@ export function installChannel(
       const messageDetail = detail(error);
       notify("octo-channel: agent creation failed for chat " + message.chatId + ": " + messageDetail);
       ctx.logger.warn("agent creation failed for chat %s: %s", message.chatId, messageDetail);
-      await port
-        .send(message.chatId, { text: "\u26a0\ufe0f \u65e0\u6cd5\u542f\u52a8\u4f1a\u8bdd\uff1a" + messageDetail }, { channelType: message.channelType })
-        .catch(reportSendFailure);
+      await sendUserFacingFailure(port, message, "暂时无法启动会话，请稍后重试。", reportSendFailure);
     }
   };
 

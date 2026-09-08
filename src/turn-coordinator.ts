@@ -84,6 +84,19 @@ export class TurnCoordinator {
     return coordinated;
   }
 
+  /** Return queued plus active turn count for one conversation.
+   * @param key - conversation identity.
+   * @returns Number of turns awaiting or producing output.
+   */
+  pendingCount(key: ConversationKey): number {
+    let count = 0;
+    for (const queue of this.queued.values()) count += queue.filter((turn) => turn.target.conversationKey === key).length;
+    for (const turns of this.active.values()) {
+      for (const turn of turns.values()) if (turn.target.conversationKey === key) count += 1;
+    }
+    return count;
+  }
+
   /** Drop queued and active state for one conversation. */
   clear(key: ConversationKey): void {
     this.latest.delete(key);

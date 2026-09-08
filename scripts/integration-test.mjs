@@ -112,6 +112,7 @@ const config = {
   sessionScope: "chat",
   requireMention: true,
   leanChat: true,
+  accessMode: "open",
   ackDelayMs: 3000,
   denyTools: ["ask_user_question"],
   heartbeatIntervalMs: 30000,

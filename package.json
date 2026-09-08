@@ -1,7 +1,7 @@
 {
   "name": "dsh-octo-channel",
-  "description": "Octo IM channel for DeepSeek Harness: DMs and group @mentions drive per-chat DSH agent sessions, text replies return to Octo",
-  "version": "0.1.0",
+  "description": "Production-grade Octo IM channel for DeepSeek Harness with bounded access policy, real connection readiness, reconnect recovery, and drainable replies",
+  "version": "0.2.0",
   "type": "module",
   "engines": { "node": ">=20.0.0" },
   "main": "lib/index.js",
@@ -17,6 +17,7 @@
     "lib",
     "src",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "cordis.patch.yml"
@@ -24,6 +25,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run typecheck && npm run build && node scripts/integration-test.mjs && node scripts/regression-test.mjs",
+    "check": "npm test && git diff --check",
     "prepack": "npm run build"
   },
   "keywords": ["dsh", "deepseek-harness", "octo", "wukongim", "im", "channel", "plugin"],
