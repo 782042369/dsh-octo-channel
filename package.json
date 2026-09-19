@@ -1,7 +1,7 @@
 {
   "name": "dsh-octo-channel",
   "description": "Production-grade Octo IM channel for DeepSeek Harness with bounded access policy, real connection readiness, reconnect recovery, and drainable replies",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "engines": { "node": ">=20.0.0" },
   "main": "lib/index.js",
@@ -25,7 +25,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && npm run build && node scripts/integration-test.mjs && node scripts/regression-test.mjs",
+    "test": "npm run typecheck && npm run build && node scripts/integration-test.mjs && node scripts/regression-test.mjs && node scripts/crypto-test.mjs",
     "check": "npm test && git diff --check",
     "prepack": "npm run build"
   },
@@ -38,9 +38,6 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "crypto-js": "^4.2.0",
-    "curve25519-js": "^0.0.4",
-    "md5-typescript": "^1.0.5",
     "ws": "^8.21.0"
   },
   "peerDependencies": {
@@ -51,7 +48,6 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@types/crypto-js": "^4.2.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.10",
     "typescript": "^5.9.3"

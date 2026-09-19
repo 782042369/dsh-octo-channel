@@ -48,12 +48,6 @@ const LEAN_CHAT_PROMPT =
   "or dtodo tools at the end of a reply. Use those tools only in a turn where the user explicitly asked you to " +
   "remember something, set or check a todo, or manage memory.";
 
-interface ConversationBinding {
-  readonly key: ConversationKey;
-  readonly chatId: string;
-  readonly channelType: number;
-  readonly owner: OwnedAgent;
-}
 
 /** Convert an unknown failure into a log-safe string.
  * @param error - thrown value from the host or transport.
@@ -122,8 +116,6 @@ export function installChannel(
 ): void {
   let active = true;
   const coordinator = new TurnCoordinator();
-  const bindingsBySession = new Map<string, ConversationBinding>();
-  const bindingsByKey = new Map<ConversationKey, ConversationBinding>();
   const presentations = new Map<string, { readonly key: ConversationKey; readonly presenter: TextPresenter }>();
   const cwd = resolve(config.cwd);
 
@@ -207,26 +199,6 @@ export function installChannel(
     return preparing;
   };
 
-  const rememberBinding = (
-    owner: OwnedAgent,
-    target: TurnTarget,
-    channelType: number,
-  ): ConversationBinding => {
-    const previous = bindingsByKey.get(owner.conversationKey);
-    if (previous !== undefined && previous.owner.handle.agent.session.id !== owner.handle.agent.session.id) {
-      bindingsBySession.delete(previous.owner.handle.agent.session.id);
-    }
-    const binding = Object.freeze({
-      key: owner.conversationKey,
-      chatId: target.chatId,
-      channelType,
-      owner,
-    });
-    bindingsByKey.set(owner.conversationKey, binding);
-    bindingsBySession.set(owner.handle.agent.session.id, binding);
-    return binding;
-  };
-
   const closePresentations = async (key?: ConversationKey): Promise<void> => {
     const closing: Promise<void>[] = [];
     for (const [turnId, presentation] of presentations) {
@@ -244,12 +216,14 @@ export function installChannel(
       onFailure: reportSendFailure,
       typing: true,
       ackDelayMs: config.ackDelayMs,
+      maxReplyChars: config.maxReplyChars,
+      idleTimeoutMs: config.turnIdleTimeoutMs,
     });
     presentations.set(turn.id, { key: turn.target.conversationKey, presenter });
     return presenter;
   };
 
-  const handleMessage = async (message: OctoMessage): Promise<void> => {
+  const handleInbound = async (message: OctoMessage): Promise<void> => {
     if (!isMessageAllowed(message, config, port.ownerUid)) {
       ctx.logger.debug("octo-channel: message rejected by access policy");
       return;
@@ -278,13 +252,10 @@ export function installChannel(
         return;
       }
       let owner = await state.agents.acquire(target.conversationKey);
-      let binding = rememberBinding(owner, target, message.channelType);
       if (!active) return;
       if (!state.agents.isCurrent(owner)) {
         owner = await state.agents.acquire(target.conversationKey);
-        binding = rememberBinding(owner, target, message.channelType);
       }
-      void binding;
       // Create the presenter at submission so its ack timer runs from the
       // moment the message arrives, not from the first host event.
       presentationFor(coordinator.submit(owner, target, chatUserMessage(message)));
@@ -293,6 +264,20 @@ export function installChannel(
       notify("octo-channel: agent creation failed for chat " + message.chatId + ": " + messageDetail);
       ctx.logger.warn("agent creation failed for chat %s: %s", message.chatId, messageDetail);
       await sendUserFacingFailure(port, message, "暂时无法启动会话，请稍后重试。", reportSendFailure);
+    }
+  };
+
+  /** Inbound entry point: a rejection here would otherwise reach the host event
+   * loop, where an unhandled rejection terminates the whole DSH process.
+   * @param message - normalized inbound Octo message.
+   */
+  const handleMessage = async (message: OctoMessage): Promise<void> => {
+    try {
+      await handleInbound(message);
+    } catch (error) {
+      const text = detail(error);
+      notify("octo-channel: inbound handler failed: " + text);
+      ctx.logger.warn("inbound handler failed: %s", text);
     }
   };
 
@@ -325,9 +310,7 @@ export function installChannel(
 
   ctx.effect(() => () => {
     active = false;
-    coordinator.close();
-    bindingsBySession.clear();
-    bindingsByKey.clear();
+      coordinator.close();
     const closeAgents = prepared !== undefined
       ? prepared.agents.close()
       : preparing?.then((state) => state.agents.close(), () => undefined);

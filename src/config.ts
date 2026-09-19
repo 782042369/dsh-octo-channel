@@ -67,6 +67,10 @@ export interface Config {
   maxMessageChars?: number;
   /** Maximum queued turns per conversation before applying backpressure. */
   maxQueuedTurns?: number;
+  /** Outbound replies longer than this are split into several chat messages. */
+  maxReplyChars?: number;
+  /** Finalize a turn in the chat when the host stops emitting events for this long. */
+  turnIdleTimeoutMs?: number;
   /** Interval of the Octo online-status heartbeat. */
   heartbeatIntervalMs?: number;
 }
@@ -92,6 +96,8 @@ export interface ResolvedConfig {
   deniedChatIds: string[];
   maxMessageChars: number;
   maxQueuedTurns: number;
+  maxReplyChars: number;
+  turnIdleTimeoutMs: number;
   heartbeatIntervalMs: number;
 }
 
@@ -116,6 +122,8 @@ export const Config: z<Config> = z.object({
   deniedChatIds: z.array(String).default([]),
   maxMessageChars: z.number().default(12000),
   maxQueuedTurns: z.number().default(3),
+  maxReplyChars: z.number().default(3500),
+  turnIdleTimeoutMs: z.number().default(1_800_000),
   heartbeatIntervalMs: z.number().default(30000),
 });
 
@@ -152,6 +160,8 @@ export function resolveConfig(config: Config): ResolvedConfig {
     deniedChatIds: normalizeIds(config.deniedChatIds),
     maxMessageChars: clampInt(config.maxMessageChars, 12_000, 256, 200_000),
     maxQueuedTurns: clampInt(config.maxQueuedTurns, 3, 1, 32),
+    maxReplyChars: clampInt(config.maxReplyChars, 3_500, 500, 50_000),
+    turnIdleTimeoutMs: clampInt(config.turnIdleTimeoutMs, 1_800_000, 30_000, 86_400_000),
     heartbeatIntervalMs: clampInt(config.heartbeatIntervalMs, 30_000, 5_000, 300_000),
   };
 }

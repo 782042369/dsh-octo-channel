@@ -2,6 +2,7 @@
  * Runtime boundary and Cordis activation for the plugin.
  * @module dsh-octo-channel/runtime
  */
+import { createRequire } from "node:module";
 import type { Context } from "@deepseek-ai/cordis";
 import { Config, resolveConfig, type ResolvedConfig } from "./config.js";
 import { installChannel } from "./channel.js";
@@ -12,7 +13,19 @@ import { OctoPort } from "./port.js";
 const SETTINGS_NAMESPACE = "octo-channel";
 
 /** The plugin version reported to the Octo server at registration. */
-const PLUGIN_VERSION = "0.2.0";
+/** The plugin version reported to the Octo server at registration. */
+const PLUGIN_VERSION = readPluginVersion();
+
+/** Read this package's version so it cannot drift from package.json.
+ * @returns The package version, or "0.0.0" when the manifest cannot be read.
+ */
+function readPluginVersion(): string {
+  try {
+    return (createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 /** A resolved configuration carrying enough credentials to connect. */
 function hasCredentials(config: ResolvedConfig): boolean {

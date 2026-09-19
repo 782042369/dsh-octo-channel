@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- performance: the WuKongIM session crypto now uses node:crypto (X25519 + AES-128-CBC + MD5), dropping the crypto-js, curve25519-js and md5-typescript runtime dependencies; the derived key/IV are pinned against the previous implementation by a test vector.
+- performance: the frame parser accumulates bytes in one Uint8Array copy per chunk instead of a per-byte number array, cutting the memory ceiling of the 4 MiB buffer roughly 8x.
+- reliability: long answers are chunked (`maxReplyChars`, default 3500) so a big reply cannot be rejected by the server.
+- reliability: a turn whose host events stop arriving is finalized after `turnIdleTimeoutMs` (default 30 min), and the typing keep-alive stops after 10 min instead of pinging a chat forever.
+- reliability: sendMessage/registerBot retry once more on transient network errors and 5xx answers (client_msg_no keeps retries idempotent); fatal re-registration backs off exponentially so two clients sharing one token cannot kick each other in a hot loop.
+- reliability: the inbound handler can no longer reject into the host event loop, where an unhandled rejection would terminate the whole DSH process.
+- quality: removed write-only conversation-binding state and dead socket helpers; the plugin version is read from package.json instead of being hard-coded.
+- quality: added a crypto/framing regression suite (`scripts/crypto-test.mjs`).
+
 ## 0.2.0
 
 - security: owner-only access is now the default; explicit allowlist and open modes are visible and auditable.
