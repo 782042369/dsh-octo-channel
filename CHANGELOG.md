@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- docs: the README is Chinese-first now, rebuilt from repository facts with a centered header, verified badges, highlights, quick install / quick start paths, a full configuration table, and troubleshooting notes.
+- docs: added an icon under `assets/` (shipped in the npm package as well).
+- docs: fixed the stale 0.2.0 install examples.
+
 ## 0.3.0
 
 - performance: the WuKongIM session crypto now uses node:crypto (X25519 + AES-128-CBC + MD5), dropping the crypto-js, curve25519-js and md5-typescript runtime dependencies; the derived key/IV are pinned against the previous implementation by a test vector.

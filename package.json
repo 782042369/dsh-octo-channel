@@ -1,9 +1,11 @@
 {
   "name": "dsh-octo-channel",
   "description": "Production-grade Octo IM channel for DeepSeek Harness with bounded access policy, real connection readiness, reconnect recovery, and drainable replies",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
@@ -16,6 +18,7 @@
   "files": [
     "lib",
     "src",
+    "assets",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -29,7 +32,15 @@
     "check": "npm test && git diff --check",
     "prepack": "npm run build"
   },
-  "keywords": ["dsh", "deepseek-harness", "octo", "wukongim", "im", "channel", "plugin"],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "octo",
+    "wukongim",
+    "im",
+    "channel",
+    "plugin"
+  ],
   "license": "Apache-2.0",
   "dsh": {
     "bundle": {
@@ -44,7 +55,9 @@
     "@deepseek-ai/cordis": "^4.0.1"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
